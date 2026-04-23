@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+pymongo[srv]
+motor
+langchain
+langchain-community
+langgraph
+langchain-google-genai
+pymupdf
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+pydantic
+pydantic-settings
+python-dotenv
+openai
+httpx
