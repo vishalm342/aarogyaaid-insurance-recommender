@@ -1,23 +1,18 @@
-from backend.rag.retriever import retrieve_chunks
-from backend.db.mongo import mongo_db
+from rag.retriever import retrieve_policy_chunks
+from db.mongo import chunks_collection
+from typing import List, Dict
 
-async def retrieve_policy_chunks_tool(query: str) -> str:
-    chunks = await retrieve_chunks(query, top_k=5)
-    formatted = ["---"]
-    for c in chunks:
-        formatted.append(f"Source: {c.get('policy_name', 'Unknown Policy')} ({c.get('insurer', 'Unknown Insurer')}) - Clause: {c.get('clause_type', 'General')}")
-        formatted.append(c.get("text", ""))
-        formatted.append("---")
-    return "\n".join(formatted)
+async def tool_retrieve_policy_chunks(query: str, policy_id: str = None, top_k: int = 5) -> List[Dict]:
+    return await retrieve_policy_chunks(query, policy_id=policy_id, top_k=top_k)
 
-async def get_all_policies_tool() -> str:
-    cursor = mongo_db.policies_collection.find({}, {"policy_name": 1, "insurer": 1})
-    policies = await cursor.to_list(length=100)
-    
-    if not policies:
-        return "No policies available in the database."
-        
-    res = []
-    for p in policies:
-        res.append(f"- {p.get('policy_name')} by {p.get('insurer')}")
-    return "\n".join(res)
+async def tool_list_all_policies() -> List[Dict]:
+    pipeline = [
+        {"$group": {
+            "_id": "$policy_id",
+            "policy_name": {"$first": "$policy_name"},
+            "insurer": {"$first": "$insurer"}
+        }},
+        {"$project": {"_id": 0, "policy_id": "$_id", "policy_name": 1, "insurer": 1}}
+    ]
+    cursor = chunks_collection.aggregate(pipeline)
+    return await cursor.to_list(length=100)

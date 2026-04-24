@@ -1,33 +1,28 @@
-import uuid
-from backend.db.mongo import mongo_db
-from datetime import datetime
+from db.mongo import db
+from typing import Dict, Any
+import datetime
 
-async def create_session(session_id: str, profile: dict) -> None:
-    session_data = {
+sessions_col = db["sessions"]
+
+async def create_session(session_id: str, profile: Dict[str, Any]):
+    await sessions_col.insert_one({
         "_id": session_id,
         "profile": profile,
-        "messages": [],
-        "recommendation": None,
-        "created_at": datetime.utcnow()
-    }
-    await mongo_db.sessions_collection.insert_one(session_data)
+        "recommendation": {},
+        "recommended_policy_id": None,
+        "recommended_policy_name": None,
+        "created_at": datetime.datetime.utcnow()
+    })
 
-async def get_session(session_id: str) -> dict | None:
-    return await mongo_db.sessions_collection.find_one({"_id": session_id})
+async def get_session(session_id: str) -> Dict[str, Any]:
+    return await sessions_col.find_one({"_id": session_id})
 
-async def update_session_recommendation(session_id: str, recommended_policy_id: str, recommended_policy_name: str, recommendation: dict) -> None:
-    await mongo_db.sessions_collection.update_one(
+async def update_session_recommendation(session_id: str, policy_id: str, policy_name: str, recommendation: Dict):
+    await sessions_col.update_one(
         {"_id": session_id},
         {"$set": {
-            "recommended_policy_id": recommended_policy_id,
-            "recommended_policy_name": recommended_policy_name,
-            "recommendation": recommendation
+            "recommendation": recommendation,
+            "recommended_policy_id": policy_id,
+            "recommended_policy_name": policy_name
         }}
-    )
-
-async def append_chat_message(session_id: str, role: str, content: str) -> None:
-    message = {"role": role, "content": content, "timestamp": datetime.utcnow()}
-    await mongo_db.sessions_collection.update_one(
-        {"_id": session_id},
-        {"$push": {"messages": message}}
     )

@@ -1,59 +1,89 @@
-from typing import Annotated, TypedDict
-from langgraph.graph import StateGraph, START, END
-from backend.agent.prompts import SYSTEM_PROMPT
-from backend.agent.tools import retrieve_policy_chunks_tool
-from backend.config import settings
-from langchain_openai import ChatOpenAI
 import json
+import re
+from openai import AsyncOpenAI
+from config import settings
+from agent.state import AgentState
+from agent.prompts import RECOMMENDATION_SYSTEM_PROMPT
+from agent.tools import tool_retrieve_policy_chunks, tool_list_all_policies
 
-class UserState(TypedDict):
-    profile: dict
-    messages: list
-    retrieved_chunks: list
-    recommendation: dict
-    session_id: str
+client = AsyncOpenAI(
+    api_key=settings.sambanova_api_key,
+    base_url=settings.sambanova_base_url
+)
 
-def get_recommendation_graph():
-    llm = ChatOpenAI(
-        model=settings.sambanova_model,
-        api_key=settings.sambanova_api_key,
-        base_url=settings.sambanova_base_url,
-        max_retries=2,
-        model_kwargs={"response_format": {"type": "json_object"}}
+def _build_profile_query(profile: dict) -> str:
+    conditions = ", ".join(profile.get("pre_existing_conditions", ["None"])) or "None"
+    return (
+        f"Health insurance for {profile['age']} year old "
+        f"{profile['lifestyle']} lifestyle person "
+        f"with {conditions} "
+        f"income {profile['annual_income']} "
+        f"city {profile['city_tier']}"
     )
-    
-    async def guardrail_node(state: UserState):
-        # We check messages or profile for medical queries
-        # For simplicity in recommendation flow, if it's purely profile data, we pass.
-        # This will be more relevant in the chat route.
-        return state
 
-    async def retrieve_node(state: UserState):
-        p = state["profile"]
-        query = f"Health insurance for {p['age']} year old, {p['lifestyle']} lifestyle, pre-existing conditions: {', '.join(p['pre_existing_conditions'])}, income {p['annual_income_band']}, living in {p['city_tier']}."
-        chunks_str = await retrieve_policy_chunks_tool(query)
-        state["retrieved_chunks"] = [chunks_str]
-        return state
+async def recommendation_node(state: AgentState) -> AgentState:
+    profile = state["profile"]
+    policies = await tool_list_all_policies()
+    query = _build_profile_query(profile)
 
-    async def recommend_node(state: UserState):
-        chunks_context = state["retrieved_chunks"][0]
-        prompt = f"{SYSTEM_PROMPT}\n\nRETRIEVED KNOWLEDGE:\n{chunks_context}\n\nUSER PROFILE:\n{json.dumps(state['profile'])}\n\nRespond with ONLY the JSON object."
-        
-        response = await llm.ainvoke(prompt)
+    all_chunks = []
+    for policy in policies:
+        chunks = await tool_retrieve_policy_chunks(query, policy_id=policy["policy_id"], top_k=3)
+        all_chunks.extend(chunks)
+
+    if not all_chunks:
+        all_chunks = await tool_retrieve_policy_chunks(query, top_k=8)
+
+    context = "\n\n---\n\n".join([
+        f"Policy: {c['policy_name']} | Insurer: {c['insurer']}\n{c['text']}"
+        for c in all_chunks
+    ])
+
+    user_message = f"""
+User Profile:
+- Name: {profile['full_name']}
+- Age: {profile['age']}
+- Lifestyle: {profile['lifestyle']}
+- Pre-existing Conditions: {', '.join(profile.get('pre_existing_conditions', ['None']))}
+- Annual Income Band: {profile['annual_income']}
+- City Tier: {profile['city_tier']}
+
+Retrieved Policy Documents:
+{context}
+
+Based on the profile and ONLY the retrieved policy documents above, generate the recommendation JSON.
+"""
+
+    response = await client.chat.completions.create(
+        model=settings.sambanova_model,
+        messages=[
+            {"role": "system", "content": RECOMMENDATION_SYSTEM_PROMPT},
+            {"role": "user", "content": user_message}
+        ],
+        temperature=0.3,
+        max_tokens=2000
+    )
+
+    raw = response.choices[0].message.content.strip()
+    json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+    if json_match:
         try:
-            state["recommendation"] = json.loads(response.content)
-        except Exception:
-            state["recommendation"] = {} # Fallback
-        return state
+            recommendation = json.loads(json_match.group())
+        except json.JSONDecodeError:
+            recommendation = {"raw_response": raw, "error": "JSON parse failed"}
+    else:
+        recommendation = {"raw_response": raw, "error": "No JSON found"}
 
-    builder = StateGraph(UserState)
-    builder.add_node("guardrail_node", guardrail_node)
-    builder.add_node("retrieve_node", retrieve_node)
-    builder.add_node("recommend_node", recommend_node)
+    return {**state, "retrieved_chunks": all_chunks, "recommendation": recommendation}
 
-    builder.add_edge(START, "guardrail_node")
-    builder.add_edge("guardrail_node", "retrieve_node")
-    builder.add_edge("retrieve_node", "recommend_node")
-    builder.add_edge("recommend_node", END)
 
-    return builder.compile()
+async def run_recommendation(profile: dict, session_id: str) -> dict:
+    state: AgentState = {
+        "session_id": session_id,
+        "profile": profile,
+        "messages": [],
+        "retrieved_chunks": [],
+        "recommendation": {}
+    }
+    result = await recommendation_node(state)
+    return result["recommendation"]
