@@ -1,9 +1,6 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  turbopack: {
-    root: "/home/vishal/Documents/aarogyaaid-insurance-recommender/frontend",
-  },
   async rewrites() {
     return [
       {
