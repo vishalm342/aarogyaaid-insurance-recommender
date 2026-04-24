@@ -1,0 +1,30 @@
+POLICY NAME: Star Health Comprehensive Insurance Plan
+INSURER: Star Health and Allied Insurance Co. Ltd.
+PREMIUM: Rs. 12,500 per year
+COVER AMOUNT: Rs. 5,00,000 (5 Lakhs)
+
+WAITING PERIODS
+Initial waiting period: 30 days. Pre-existing disease waiting period: 36 months.
+Diabetes and Hypertension: Covered after 24 months with 10 percent premium loading.
+Specific diseases like cataract and joint replacement: 24 months waiting period.
+
+INCLUSIONS
+Inpatient hospitalization up to sum insured. Room rent up to Rs. 5000 per day.
+Pre-hospitalization 60 days. Post-hospitalization 90 days.
+OPD consultations up to Rs. 5000 per year. Daycare: 540 procedures covered.
+Ambulance up to Rs. 2000. AYUSH up to Rs. 25,000. Annual health check-up above 40 years.
+
+EXCLUSIONS
+Cosmetic surgery. Dental unless accidental. Self-inflicted injuries.
+Infertility treatments. Alcohol or drug abuse related hospitalization.
+
+SUB-LIMITS AND CO-PAY
+Room rent sub-limit Rs. 5000 per day. ICU Rs. 10,000 per day.
+Co-pay: 10 percent for insured above 60 years. Cataract Rs. 40,000 per eye.
+Cashless at 14,000 plus network hospitals.
+
+SUITABILITY
+Best for age 25 to 50 in Metro or Tier-2 cities with income 3 to 15 lakhs.
+Good for Diabetes or Hypertension patients who can wait 24 months.
+Not ideal for Tier-3 city residents due to limited network hospitals.
+Suitability Score: 78 out of 100 for moderate lifestyle Metro residents.
