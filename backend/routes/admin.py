@@ -3,8 +3,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 import jwt
 import datetime
-import tempfile
 import os
+import uuid
 from config import settings
 from db.mongo import chunks_collection
 from rag.ingest import ingest_policy
@@ -12,14 +12,12 @@ from rag.ingest import ingest_policy
 router = APIRouter()
 security = HTTPBearer()
 
-
 def create_token() -> str:
     payload = {
         "sub": "admin",
         "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=12)
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
-
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -33,18 +31,15 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-
 class LoginRequest(BaseModel):
     username: str
     password: str
-
 
 @router.post("/admin/login")
 async def login(req: LoginRequest):
     if req.username != settings.admin_username or req.password != settings.admin_password:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"access_token": create_token(), "token_type": "bearer"}
-
 
 @router.get("/admin/policies", dependencies=[Depends(verify_token)])
 async def list_policies():
@@ -73,7 +68,6 @@ async def list_policies():
         for d in docs
     ]
 
-
 @router.post("/admin/upload", dependencies=[Depends(verify_token)])
 async def upload_policy(
     file: UploadFile = File(...),
@@ -85,22 +79,24 @@ async def upload_policy(
     if ext not in allowed:
         raise HTTPException(status_code=400, detail=f"File type {ext} not supported. Use PDF, TXT, or JSON.")
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    policy_id = str(uuid.uuid4())
 
     try:
-        chunk_count = await ingest_policy(tmp_path, policy_name=policy_name, insurer=insurer, file_type=ext)
+        file_bytes = await file.read()
+        chunk_count = await ingest_policy(
+            file_bytes=file_bytes,
+            filename=file.filename,
+            policy_id=policy_id,
+            policy_name=policy_name, 
+            insurer=insurer
+        )
         return {"message": f"Ingested {chunk_count} chunks", "policy_name": policy_name}
-    finally:
-        os.unlink(tmp_path)
-
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
 
 class EditPolicyRequest(BaseModel):
     policy_name: str
     insurer: str
-
 
 @router.put("/admin/policies/{policy_id}", dependencies=[Depends(verify_token)])
 async def edit_policy(policy_id: str, req: EditPolicyRequest):
@@ -111,7 +107,6 @@ async def edit_policy(policy_id: str, req: EditPolicyRequest):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Policy not found")
     return {"message": f"Updated {result.modified_count} chunks"}
-
 
 @router.delete("/admin/policies/{policy_id}", dependencies=[Depends(verify_token)])
 async def delete_policy(policy_id: str):
