@@ -2,7 +2,7 @@ def test_recommendation_suitability():
     # Mock data for unit test
     profile = {
         "pre_existing_conditions": ["Diabetes"],
-        "annual_income_band": "under_3L"
+        "annual_income": "under_3L"
     }
     
     policy_a = {
@@ -25,7 +25,7 @@ def test_recommendation_suitability():
                 score -= 30
             else:
                 score += 20
-        if prof["annual_income_band"] == "under_3L":
+        if prof["annual_income"] == "under_3L":
             if p["co_pay"] == "5%":
                 score += 10
             else:
