@@ -17,7 +17,7 @@ class ChatMessage(BaseModel):
     content: str
 
 class ChatRequest(BaseModel):
-    session_id: str
+    session_id: str = "default-session"
     message: str
     profile: dict
     recommended_policy: str = ""
