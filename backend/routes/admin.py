@@ -1,101 +1,121 @@
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
-from pydantic import BaseModel
-from datetime import datetime, timedelta
-import uuid
-from backend.config import settings
-from backend.db.mongo import mongo_db
-from backend.rag.ingest import ingest_policy
-from jose import jwt, JWTError
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
+import jwt
+import datetime
+import tempfile
+import os
+from config import settings
+from db.mongo import chunks_collection
+from rag.ingest import ingest_policy
 
 router = APIRouter()
 security = HTTPBearer()
 
+
+def create_token() -> str:
+    payload = {
+        "sub": "admin",
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=12)
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
-        payload = jwt.decode(credentials.credentials, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-        if payload.get("sub") != settings.admin_username:
-            raise HTTPException(status_code=401, detail="Invalid token")
-    except JWTError:
+        jwt.decode(
+            credentials.credentials,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm]
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
-    return True
+
 
 class LoginRequest(BaseModel):
     username: str
     password: str
 
-@router.post("/login")
+
+@router.post("/admin/login")
 async def login(req: LoginRequest):
     if req.username != settings.admin_username or req.password != settings.admin_password:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-        
-    expire = datetime.utcnow() + timedelta(hours=24)
-    token = jwt.encode({"sub": req.username, "exp": expire}, settings.jwt_secret, algorithm=settings.jwt_algorithm)
-    return {"token": token}
+    return {"access_token": create_token(), "token_type": "bearer"}
 
-@router.post("/policies/upload", dependencies=[Depends(verify_token)])
-async def upload_policy(
-    policy_name: str = Form(...),
-    insurer: str = Form(...),
-    file: UploadFile = File(...)
-):
-    valid_exts = ["pdf", "txt", "json"]
-    ext = file.filename.split(".")[-1].lower() if "." in file.filename else ""
-    if ext not in valid_exts:
-        ext = "pdf" # fallback logic or validation
 
-    policy_id = str(uuid.uuid4())
-    file_bytes = await file.read()
-    
-    chunk_count = await ingest_policy(file_bytes, file.filename, policy_name, insurer, policy_id)
-    
-    policy_doc = {
-        "_id": policy_id,
-        "policy_name": policy_name,
-        "insurer": insurer,
-        "filename": file.filename,
-        "upload_date": datetime.utcnow(),
-        "chunk_count": chunk_count
-    }
-    
-    await mongo_db.policies_collection.insert_one(policy_doc)
-    return {"policy_id": policy_id}
-
-@router.get("/policies", dependencies=[Depends(verify_token)])
+@router.get("/admin/policies", dependencies=[Depends(verify_token)])
 async def list_policies():
-    cursor = mongo_db.policies_collection.find({})
-    policies = await cursor.to_list(length=100)
-    return policies
+    pipeline = [
+        {"$group": {
+            "_id": "$policy_id",
+            "policy_name": {"$first": "$policy_name"},
+            "insurer": {"$first": "$insurer"},
+            "file_type": {"$first": "$file_type"},
+            "uploaded_at": {"$first": "$uploaded_at"},
+            "chunk_count": {"$sum": 1}
+        }},
+        {"$sort": {"uploaded_at": -1}}
+    ]
+    cursor = chunks_collection.aggregate(pipeline)
+    docs = await cursor.to_list(length=100)
+    return [
+        {
+            "policy_id": d["_id"],
+            "policy_name": d["policy_name"],
+            "insurer": d["insurer"],
+            "file_type": d.get("file_type", "unknown"),
+            "uploaded_at": str(d.get("uploaded_at", "")),
+            "chunk_count": d["chunk_count"]
+        }
+        for d in docs
+    ]
 
-class PolicyUpdate(BaseModel):
-    policy_name: str | None = None
-    insurer: str | None = None
 
-@router.patch("/policies/{policy_id}", dependencies=[Depends(verify_token)])
-async def update_policy(policy_id: str, req: PolicyUpdate):
-    update_data = {k: v for k, v in req.model_dump().items() if v is not None}
-    if not update_data:
-        return {"status": "no update provided"}
-        
-    await mongo_db.policies_collection.update_one(
-        {"_id": policy_id},
-        {"$set": update_data}
-    )
-    # Update chunks to keep in sync
-    await mongo_db.chunks_collection.update_many(
+@router.post("/admin/upload", dependencies=[Depends(verify_token)])
+async def upload_policy(
+    file: UploadFile = File(...),
+    policy_name: str = Form(...),
+    insurer: str = Form(...)
+):
+    allowed = {".pdf", ".txt", ".json"}
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"File type {ext} not supported. Use PDF, TXT, or JSON.")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        chunk_count = await ingest_policy(tmp_path, policy_name=policy_name, insurer=insurer, file_type=ext)
+        return {"message": f"Ingested {chunk_count} chunks", "policy_name": policy_name}
+    finally:
+        os.unlink(tmp_path)
+
+
+class EditPolicyRequest(BaseModel):
+    policy_name: str
+    insurer: str
+
+
+@router.put("/admin/policies/{policy_id}", dependencies=[Depends(verify_token)])
+async def edit_policy(policy_id: str, req: EditPolicyRequest):
+    result = await chunks_collection.update_many(
         {"policy_id": policy_id},
-        {"$set": update_data}
+        {"$set": {"policy_name": req.policy_name, "insurer": req.insurer}}
     )
-    return {"status": "updated"}
-
-@router.delete("/policies/{policy_id}", dependencies=[Depends(verify_token)])
-async def delete_policy(policy_id: str):
-    async with await mongo_db.client.start_session() as session:
-        async with session.start_transaction():
-            res1 = await mongo_db.policies_collection.delete_one({"_id": policy_id}, session=session)
-            await mongo_db.chunks_collection.delete_many({"policy_id": policy_id}, session=session)
-            
-    if res1.deleted_count == 0:
+    if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Policy not found")
-        
-    return {"status": "deleted"}
+    return {"message": f"Updated {result.modified_count} chunks"}
+
+
+@router.delete("/admin/policies/{policy_id}", dependencies=[Depends(verify_token)])
+async def delete_policy(policy_id: str):
+    result = await chunks_collection.delete_many({"policy_id": policy_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    return {"message": f"Deleted {result.deleted_count} chunks from vector store"}
