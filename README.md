@@ -1,4 +1,4 @@
-# AarogyaAid Recommender
+# AarogyaAid - AI Powered Insurance Recommender Platform
 
 An AI-powered health insurance recommendation platform built for AarogyaAid's engineering assessment. The system uses a RAG (Retrieval-Augmented Generation) pipeline to help Indian patients navigate health insurance decisions with empathy, transparency, and grounded policy data.
 
